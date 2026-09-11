@@ -25,13 +25,17 @@ def fuse(tiers: list[TierResult]) -> FusionResult:
         data={"tiers": {str(t.tier): {"status": t.status, "score": t.score} for t in tiers}},
     )
     by_tier = {tier.tier: tier for tier in tiers}
-    crypto = by_tier[1]
-    forensics = by_tier[3]
-    biometrics = by_tier[4]
+    crypto = by_tier.get(1)
+    ocr = by_tier.get(2)
+    forensics = by_tier.get(3)
+    biometrics = by_tier.get(4)
     unavailable = [tier.title for tier in tiers if tier.status == "unavailable"]
+    failures = [tier for tier in tiers if tier.status == "fail"]
+    reviews = [tier for tier in tiers if tier.status == "review"]
 
-    if crypto.status == "fail":
-        reasons = ["ICAO 9303 MRZ check-digit validation failed; this is a hard rejection."]
+    # 1. HARD_REJECT: Cryptographic or Checksum validation failed
+    if crypto and crypto.status == "fail":
+        reasons = ["ICAO 9303 MRZ or Aadhaar Verhoeff check-digit failure; immediate hard rejection."]
         log_event(
             logger,
             logging.WARNING,
@@ -51,35 +55,63 @@ def fuse(tiers: list[TierResult]) -> FusionResult:
             ),
         )
 
-    risk = 8
+    # 2. Accumulate risk signals and explainable reasons
+    risk = 0
     reasons: list[str] = []
-    if crypto.status != "pass":
-        risk += 24
+
+    # Tier 1 Crypto
+    if crypto and crypto.status != "pass":
+        risk += 25
         reasons.append("Cryptographic document validation is incomplete.")
-    if by_tier[2].status != "pass":
-        risk += 18
-        reasons.append("OCR and schema cross-checking is incomplete.")
-    if forensics.status == "review":
-        risk += 34
-        reasons.append("Passive-forensics signals require officer review.")
-    if biometrics.status != "pass":
-        risk += 20
-        reasons.append("Live face match and liveness verification are incomplete.")
 
-    if forensics.status == "review" and biometrics.status == "fail":
+    # Tier 2 OCR
+    if ocr:
+        if ocr.status == "fail":
+            risk += 45
+            reasons.append("Visual text contradicts machine-readable data (tampering detected).")
+        elif ocr.status != "pass":
+            risk += 18
+            reasons.append("OCR and schema cross-checking is incomplete.")
+
+    # Tier 3 Forensics
+    if forensics:
+        if forensics.status == "fail":
+            risk += 45
+            reasons.append("Passive-forensics detected pixel-level splicing or paper forgery.")
+        elif forensics.status == "review":
+            risk += 28
+            reasons.append("Passive-forensics signals require officer review.")
+
+    # Tier 4 Biometrics
+    if biometrics:
+        if biometrics.status == "fail":
+            risk += 50
+            reasons.append("Live facial verification does not match document portrait.")
+        elif biometrics.status != "pass":
+            risk += 20
+            reasons.append("Live facial verification was not completed.")
+
+    # 3. Decision Determination based on codified border security policies:
+    # - HARD_REJECT: Tier 1 fail (handled above)
+    # - FLAG (50-74+): Any tier has failed (biometrics, OCR, or forensics)
+    # - REVIEW (25-49): Any tier has review/unavailable status, or risk >= 25
+    # - CLEAR (0-24): ONLY when all configured tiers passed with zero fails, zero reviews, zero unavailables!
+
+    if failures:
         decision: Decision = "FLAG"
-        risk = max(risk, 85)
-        reasons.append("Forensic concern and biometric mismatch occurred together.")
-    elif unavailable or any(tier.status == "review" for tier in tiers):
+        risk = max(risk, 65)
+    elif unavailable or reviews or risk >= 25:
         decision = "REVIEW"
+        risk = max(risk, 28)
+        if unavailable and not any("incomplete" in r or "not completed" in r for r in reasons):
+            reasons.append(f"Pending verification: {', '.join(unavailable)}.")
     else:
+        # All tiers passed with flying colors!
         decision = "CLEAR"
-
-    risk = min(100, risk)
-    if decision == "CLEAR":
+        risk = min(risk, 8)
         reasons = ["All configured tiers passed."]
-    elif unavailable:
-        reasons.append(f"Pending integrations: {', '.join(unavailable)}.")
+
+    risk = min(100, max(0, risk))
 
     tier_status = "pass" if decision == "CLEAR" else "review" if decision == "REVIEW" else "fail"
     log_event(
