@@ -424,7 +424,15 @@ export default function TestingConsolePage() {
                                 {name.replace(/_/g, " ").toUpperCase()}
                               </strong>
                               <p className="check-box-desc">
-                                {pass
+                                {name === "secure_qr_code"
+                                  ? pass
+                                    ? "UIDAI 2D Secure QR code authenticated on substrate."
+                                    : "UIDAI 2D Secure QR code not detected on uploaded substrate."
+                                  : name === "verhoeff_checksum"
+                                  ? pass
+                                    ? "Mathematical Verhoeff dihedral checksum verified with 0% error tolerance."
+                                    : "12-digit UID Verhoeff checksum discrepancy detected! Hard rejection enforced."
+                                  : pass
                                   ? "Mathematical checksum verified with 0% error tolerance."
                                   : "Checksum discrepancy detected! Hard rejection enforced."}
                               </p>

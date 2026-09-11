@@ -83,7 +83,7 @@ def screen(
         elif not (mrz and mrz.strip()) and ocr.details.get("viz_fields", {}).get("aadhaar_number"):
             aadhaar_num = ocr.details["viz_fields"]["aadhaar_number"]
             log_event(logger, logging.INFO, "Aadhaar UID auto-extracted by OCR and fed to Tier 1 for Verhoeff validation", data={"uid": aadhaar_num})
-            crypto = tier1_crypto.run_aadhaar(aadhaar_num, back_image_path=document_back_path)
+            crypto = tier1_crypto.run_aadhaar(aadhaar_num, back_image_path=document_back_path, front_image_path=document_path)
         t2_ms = round((time.perf_counter() - t2_start) * 1000, 2)
 
         # Tier 3: Passive forensics

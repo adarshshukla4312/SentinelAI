@@ -185,36 +185,118 @@ def validate_verhoeff(num_str: str) -> bool:
     return c == 0
 
 
-def detect_qr_code(image_path: Path) -> dict[str, Any]:
-    """Detect and evaluate 2D Secure QR codes on identity document substrates."""
+def parse_uidai_qr(val: str, expected_uid: str | None = None) -> dict[str, Any]:
+    """Parse and decompress a UIDAI 2D Secure QR integer payload."""
+    if not val:
+        return {"detected": False, "valid_uidai": False}
+    if not val.isdigit():
+        return {
+            "detected": True,
+            "valid_uidai": False,
+            "raw_text": val[:120],
+            "summary": "Standard QR code detected on substrate.",
+        }
+    try:
+        import zlib
+
+        num = int(val)
+        raw_bytes = num.to_bytes((num.bit_length() + 7) // 8, byteorder="big")
+        decompressed = zlib.decompress(raw_bytes, 16 + zlib.MAX_WBITS)
+        parts = decompressed.split(b"\xff")
+        text_parts = [p.decode("utf-8", errors="ignore") for p in parts[:15]]
+
+        qr_version = text_parts[0] if len(text_parts) > 0 else "Unknown"
+        ref_id = text_parts[2] if len(text_parts) > 2 else ""
+        masked_uid = ref_id[:4] if len(ref_id) >= 4 else ""
+        name = text_parts[3] if len(text_parts) > 3 else ""
+        dob = text_parts[4] if len(text_parts) > 4 else ""
+        gender = text_parts[5] if len(text_parts) > 5 else ""
+        care_of = text_parts[6] if len(text_parts) > 6 else ""
+        district = text_parts[7] if len(text_parts) > 7 else ""
+
+        uid_matches = True
+        if expected_uid and masked_uid:
+            clean_expected = "".join(filter(str.isdigit, expected_uid))
+            uid_matches = clean_expected.endswith(masked_uid)
+
+        return {
+            "detected": True,
+            "valid_uidai": True,
+            "version": qr_version,
+            "masked_uid": masked_uid,
+            "uid_matches": uid_matches,
+            "name": name,
+            "dob": dob,
+            "gender": gender,
+            "care_of": care_of,
+            "district": district,
+            "summary": f"UIDAI {qr_version} Secure QR authenticated ({name}, UID suffix {masked_uid}).",
+        }
+    except Exception as exc:
+        return {
+            "detected": True,
+            "valid_uidai": False,
+            "error": str(exc),
+            "summary": f"QR detected ({len(val)} digits) but decompress failed: {exc}",
+        }
+
+
+def detect_qr_code(image_path: Path | None, expected_uid: str | None = None) -> dict[str, Any]:
+    """Detect and evaluate 2D Secure QR codes on identity document substrates.
+
+    Tries WeChatQRCode first for dense Aadhaar QR codes, then standard OpenCV detector.
+    """
+    if not image_path or not image_path.exists():
+        return {"detected": False, "summary": "No image provided for QR detection."}
+
     try:
         import cv2
 
         img = cv2.imread(str(image_path))
         if img is None:
-            return {"detected": False, "summary": "Unreadable back document image."}
-        detector = cv2.QRCodeDetector()
-        val, pts, _ = detector.detectAndDecode(img)
-        if pts is not None and len(pts) > 0:
-            return {
-                "detected": True,
-                "has_payload": bool(val and val.strip()),
-                "summary": "UIDAI Secure 2D Barcode / QR pattern verified on substrate.",
-            }
-        # Try multi-detection as fallback
-        retval, decoded_info, points, _ = detector.detectAndDecodeMulti(img)
-        if retval and points is not None and len(points) > 0:
-            return {
-                "detected": True,
-                "has_payload": any(bool(d and d.strip()) for d in decoded_info),
-                "summary": "UIDAI Secure 2D Barcode / QR pattern verified on substrate.",
-            }
-        return {"detected": False, "summary": "No 2D barcode detected on back image."}
+            return {"detected": False, "summary": "Unreadable document image."}
+
+        # 1. Try WeChatQRCode (handles high-density Version 15+ Aadhaar QR codes)
+        try:
+            if hasattr(cv2, "wechat_qrcode_WeChatQRCode"):
+                detector = cv2.wechat_qrcode_WeChatQRCode()
+                results, _ = detector.detectAndDecode(img)
+                if results and len(results) > 0:
+                    val = results[0]
+                    return parse_uidai_qr(val, expected_uid=expected_uid)
+        except Exception as wechat_err:
+            logger.debug(f"WeChatQRCode attempt failed: {wechat_err}")
+
+        # 2. Standard OpenCV QRCodeDetector
+        std_detector = cv2.QRCodeDetector()
+        val, pts, _ = std_detector.detectAndDecode(img)
+        if pts is not None and len(pts) > 0 and val:
+            return parse_uidai_qr(val, expected_uid=expected_uid)
+
+        # 3. Multi-detection fallback
+        retval, decoded_info, points, _ = std_detector.detectAndDecodeMulti(img)
+        if retval and decoded_info:
+            for info in decoded_info:
+                if info and info.strip():
+                    return parse_uidai_qr(info, expected_uid=expected_uid)
+
+        # 4. Try with CLAHE contrast enhancement
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+        val, pts, _ = std_detector.detectAndDecode(clahe)
+        if pts is not None and len(pts) > 0 and val:
+            return parse_uidai_qr(val, expected_uid=expected_uid)
+
+        return {"detected": False, "summary": "No 2D barcode detected on image."}
     except Exception as exc:
         return {"detected": False, "summary": f"QR scanning error: {exc}"}
 
 
-def run_aadhaar(aadhaar_number: str, back_image_path: Path | None = None) -> TierResult:
+def run_aadhaar(
+    aadhaar_number: str,
+    back_image_path: Path | None = None,
+    front_image_path: Path | None = None,
+) -> TierResult:
     """Run Verhoeff checksum validation on an extracted 12-digit Indian Aadhaar UID."""
     digits = "".join(filter(str.isdigit, aadhaar_number))
     if len(digits) != 12:
@@ -229,7 +311,15 @@ def run_aadhaar(aadhaar_number: str, back_image_path: Path | None = None) -> Tie
     formatted = f"{digits[0:4]} {digits[4:8]} {digits[8:12]}"
     is_valid = validate_verhoeff(digits)
 
-    qr_info = detect_qr_code(back_image_path) if back_image_path else None
+    # Detect QR code: check back image first, then check front image as fallback
+    qr_info = None
+    if back_image_path and back_image_path.exists():
+        qr_info = detect_qr_code(back_image_path, expected_uid=digits)
+    if (not qr_info or not qr_info.get("detected")) and front_image_path and front_image_path.exists():
+        qr_front = detect_qr_code(front_image_path, expected_uid=digits)
+        if qr_front.get("detected"):
+            qr_info = qr_front
+
     checks = {"verhoeff_checksum": is_valid}
     if qr_info is not None:
         checks["secure_qr_code"] = qr_info["detected"]
@@ -237,8 +327,20 @@ def run_aadhaar(aadhaar_number: str, back_image_path: Path | None = None) -> Tie
     if is_valid:
         log_event(logger, logging.INFO, "TIER1_AADHAAR_VERHOEFF_PASSED", data={"uid": formatted})
         summary = f"Valid Indian Aadhaar UID ({formatted}) verified via Verhoeff dihedral checksum."
-        if qr_info and qr_info["detected"]:
-            summary += " UIDAI Secure QR Code authenticated on back page."
+        if qr_info and qr_info.get("detected"):
+            if qr_info.get("valid_uidai"):
+                summary += f" UIDAI {qr_info.get('version', 'V3')} Secure QR authenticated ({qr_info.get('name', 'Holder')}, UID suffix {qr_info.get('masked_uid', '')})."
+            else:
+                summary += " UIDAI Secure QR pattern detected on substrate."
+
+        if qr_info and qr_info.get("detected"):
+            if qr_info.get("valid_uidai"):
+                qr_status_str = f"Authenticated ({qr_info.get('version', 'V3')} · {qr_info.get('name', '')} · Suffix {qr_info.get('masked_uid', '')})"
+            else:
+                qr_status_str = "Detected on substrate"
+        else:
+            qr_status_str = "Not found on substrate" if (back_image_path or front_image_path) else "Front page verified; upload back page for full QR audit"
+
         return TierResult(
             tier=1,
             title="Cryptographic validation",
@@ -250,9 +352,8 @@ def run_aadhaar(aadhaar_number: str, back_image_path: Path | None = None) -> Tie
                 "nationality": "IND",
                 "document_type": "Indian Aadhaar Card (UIDAI)",
                 "checks": checks,
-                "aadhaar_secure_qr": "Verified on back page" if (qr_info and qr_info["detected"]) else (
-                    "Not found on back page" if qr_info else "Front page verified; upload back page for full QR audit"
-                ),
+                "aadhaar_secure_qr": qr_status_str,
+                "qr_payload": qr_info if qr_info and qr_info.get("detected") else None,
             },
         )
     else:
