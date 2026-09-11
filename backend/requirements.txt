@@ -8,3 +8,6 @@ web3>=7.0.0
 rapidocr_onnxruntime>=1.2.0
 insightface>=0.7.3
 onnxruntime>=1.18.0
+opencv-python>=4.8.0
+torch>=2.0.0
+torchvision>=0.15.0
