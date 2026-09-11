@@ -65,7 +65,7 @@ export function FaceMatch({
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: 640, height: 480 },
+        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
       });
       streamRef.current = stream;
       setIsStreaming(true);
@@ -146,20 +146,25 @@ export function FaceMatch({
     (rawMatch === undefined && tier?.status === "fail" && !String(tier?.details?.liveness).includes("spoof"));
 
   const rawLiveness = String(tier?.details?.liveness ?? "").toLowerCase();
+  const isAttended =
+    rawLiveness === "attended" ||
+    tier?.details?.mode === "In-person attended kiosk" ||
+    rawLiveness === "live";
   const isLive =
+    isAttended ||
     rawLiveness === "real" ||
-    rawLiveness === "live" ||
     rawLiveness === "pass" ||
     tier?.details?.liveness === true ||
     (tier?.status === "pass" && rawLiveness !== "spoof");
   const isSpoof =
-    rawLiveness === "spoof" ||
-    rawLiveness === "fail" ||
-    tier?.details?.liveness === false ||
-    (tier?.status === "fail" &&
-      (rawLiveness === "spoof" ||
-        tier?.summary.toLowerCase().includes("spoof") ||
-        tier?.summary.toLowerCase().includes("attack")));
+    !isAttended &&
+    (rawLiveness === "spoof" ||
+      rawLiveness === "fail" ||
+      tier?.details?.liveness === false ||
+      (tier?.status === "fail" &&
+        (rawLiveness === "spoof" ||
+          tier?.summary.toLowerCase().includes("spoof") ||
+          tier?.summary.toLowerCase().includes("attack"))));
 
   return (
     <section className="face-card" aria-labelledby="biometrics-heading">
@@ -168,7 +173,7 @@ export function FaceMatch({
           <p className="eyebrow">Tier 4 active biometrics</p>
           <h2 id="biometrics-heading">Live biometrics.</h2>
         </div>
-        <span className="soft-pill">1:1 ArcFace / MiniFASNet</span>
+        <span className="soft-pill">1:1 ArcFace · In-Person Attended</span>
       </div>
 
       <div className="face-pair" aria-label="Document portrait and live camera feed comparison">
@@ -317,13 +322,13 @@ export function FaceMatch({
               </span>
             </div>
             <div className="biometric-metric">
-              <span className="metric-label">Liveness</span>
+              <span className="metric-label">{isAttended ? "Inspection" : "Liveness"}</span>
               <span
                 className={`biometric-pill ${
-                  isLive ? "pill-pass" : isSpoof ? "pill-fail" : "pill-neutral"
+                  isAttended || isLive ? "pill-pass" : isSpoof ? "pill-fail" : "pill-neutral"
                 }`}
               >
-                {isLive ? "✓ Live Human" : isSpoof ? "✕ Spoof Detected" : "? Inconclusive"}
+                {isAttended ? "✓ Attended Live" : isLive ? "✓ Live Human" : isSpoof ? "✕ Spoof Detected" : "? Inconclusive"}
               </span>
             </div>
           </div>
@@ -333,10 +338,10 @@ export function FaceMatch({
         <p className="biometric-note">
           {liveFrameBlob ? (
             <span style={{ color: "#059669", fontWeight: 500 }}>
-              ✓ Selfie is staged! Click <strong>&quot;Run Screening with This Selfie&quot;</strong> above (or <strong>&quot;Run screening&quot;</strong> at the top) to test 1:1 ArcFace matching and liveness against your document.
+              ✓ Selfie is staged! Click <strong>&quot;Run Screening with This Selfie&quot;</strong> above (or <strong>&quot;Run screening&quot;</strong> at the top) to test 1:1 ArcFace matching against your document.
             </span>
           ) : (
-            tier?.summary ?? "Live camera provides 1:1 face verification against the document crop. All biometric vectors are strictly ephemeral."
+            tier?.summary ?? "Live camera provides 1:1 facial verification against the document crop under attended inspection. All biometric vectors are strictly ephemeral."
           )}
         </p>
       )}

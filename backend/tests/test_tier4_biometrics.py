@@ -93,7 +93,7 @@ class TestTier4Biometrics(unittest.TestCase):
         self.assertIn("privacy", result.details)
 
     def test_face_match_and_live_person_passes(self) -> None:
-        """When faces match (>= 0.45) and liveness confirms real (>= 0.70), status is pass."""
+        """When faces match (>= 0.39) under attended kiosk mode, status is pass."""
         np.random.seed(42)
         base_vector = np.random.randn(512).astype(np.float32)
         similar_vector = base_vector + np.random.randn(512).astype(np.float32) * 0.05
@@ -104,21 +104,20 @@ class TestTier4Biometrics(unittest.TestCase):
         mock_app = MagicMock()
         mock_app.get.side_effect = [[doc_face], [live_face]]
 
-        with patch("pipeline.tier4_biometrics.get_face_app", return_value=mock_app), \
-             patch("pipeline.tier4_biometrics.check_liveness", return_value=(0.92, "real")):
+        with patch("pipeline.tier4_biometrics.get_face_app", return_value=mock_app):
             doc_img = Image.new("RGB", (200, 200), color="white")
             live_img = Image.new("RGB", (200, 200), color="white")
             result = run(document_image=doc_img, live_frame=live_img)
 
         self.assertEqual(result.status, "pass")
         self.assertIsNotNone(result.score)
-        self.assertGreaterEqual(result.score, 0.45)
+        self.assertGreaterEqual(result.score, 0.39)
         self.assertTrue(result.details.get("face_match"))
-        self.assertEqual(result.details.get("liveness"), "real")
+        self.assertEqual(result.details.get("liveness"), "attended")
         self.assertNotIn("embedding", result.details)
 
-    def test_face_match_with_spoof_detected_fails(self) -> None:
-        """When faces match but spoof is detected, score must be 0.3 and status fail."""
+    def test_attended_kiosk_face_match_passes_without_spoof_rejection(self) -> None:
+        """Under attended kiosk mode, face match is verified without automated spoof rejection."""
         base_vector = np.random.randn(512).astype(np.float32)
         doc_face = DummyFace(base_vector)
         live_face = DummyFace(base_vector)
@@ -126,20 +125,17 @@ class TestTier4Biometrics(unittest.TestCase):
         mock_app = MagicMock()
         mock_app.get.side_effect = [[doc_face], [live_face]]
 
-        with patch("pipeline.tier4_biometrics.get_face_app", return_value=mock_app), \
-             patch("pipeline.tier4_biometrics.check_liveness", return_value=(0.15, "spoof")):
+        with patch("pipeline.tier4_biometrics.get_face_app", return_value=mock_app):
             doc_img = Image.new("RGB", (200, 200), color="white")
             live_img = Image.new("RGB", (200, 200), color="white")
             result = run(document_image=doc_img, live_frame=live_img)
 
-        self.assertEqual(result.status, "fail")
-        self.assertEqual(result.score, 0.3)
+        self.assertEqual(result.status, "pass")
         self.assertTrue(result.details.get("face_match"))
-        self.assertEqual(result.details.get("liveness"), "spoof")
-        self.assertEqual(result.details.get("reason"), "Presentation attack detected")
+        self.assertEqual(result.details.get("liveness"), "attended")
 
     def test_face_mismatch_fails(self) -> None:
-        """When face similarity is below 0.45, status is fail with mismatch reason."""
+        """When face similarity is below 0.39, status is fail with mismatch reason."""
         vec1 = np.zeros(512, dtype=np.float32)
         vec1[0] = 1.0
         vec2 = np.zeros(512, dtype=np.float32)

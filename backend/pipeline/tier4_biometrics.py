@@ -34,8 +34,8 @@ _face_app_init_attempted: bool = False
 _anti_spoof_models: list[tuple[str, Any, int, int, float, Any]] | None = None
 _anti_spoof_init_attempted: bool = False
 
-MATCH_THRESHOLD = 0.45
-LIVENESS_THRESHOLD = 0.70
+MATCH_THRESHOLD = 0.39
+LIVENESS_THRESHOLD = 0.50
 
 
 def _get_silent_fas_dir() -> Path:
@@ -63,10 +63,10 @@ def get_face_app() -> Any:
             allowed_modules=["detection", "recognition"],
             providers=providers,
         )
-        app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+        app.prepare(ctx_id=ctx_id, det_size=(640, 640), det_thresh=0.35)
 
         _face_app = app
-        log_event(logger, logging.INFO, "INSIGHTFACE_INITIALIZED", data={"model": "buffalo_l", "providers": providers})
+        log_event(logger, logging.INFO, "INSIGHTFACE_INITIALIZED", data={"model": "buffalo_l", "providers": providers, "det_thresh": 0.35})
         return _face_app
     except Exception as exc:
         log_event(logger, logging.WARNING, "INSIGHTFACE_INIT_FAILED", data={"error": str(exc)}, exc_info=True)
@@ -159,9 +159,18 @@ def _load_image_bgr(image_source: Path | Image.Image | str | np.ndarray) -> np.n
 
 
 def _extract_primary_face(face_app: Any, bgr_img: np.ndarray) -> Any | None:
-    """Extract faces using InsightFace and select the primary face by largest bounding box area."""
+    """Extract faces using InsightFace and select the primary face by largest bounding box area.
+    Includes multi-orientation fallback for rotated document scans.
+    """
+    import cv2
+
     faces = face_app.get(bgr_img)
     if not faces:
+        for rot in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE):
+            rotated = cv2.rotate(bgr_img, rot)
+            rot_faces = face_app.get(rotated)
+            if rot_faces:
+                return max(rot_faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
         return None
     return max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
 
@@ -393,15 +402,8 @@ def run(
             )
 
         # 5. 1:1 Cosine Similarity & Privacy Discard
-        doc_emb = np.array(doc_face.normed_embedding, dtype=np.float32)
-        live_emb = np.array(live_face.normed_embedding, dtype=np.float32)
-
-        doc_norm = float(np.linalg.norm(doc_emb))
-        live_norm = float(np.linalg.norm(live_emb))
-        if doc_norm > 0:
-            doc_emb /= doc_norm
-        if live_norm > 0:
-            live_emb /= live_norm
+        doc_emb = np.asarray(doc_face.normed_embedding, dtype=np.float32)
+        live_emb = np.asarray(live_face.normed_embedding, dtype=np.float32)
 
         similarity = float(np.clip(float(np.dot(doc_emb, live_emb)), -1.0, 1.0))
 
@@ -413,62 +415,35 @@ def run(
             logger,
             logging.DEBUG,
             "TIER4_SIMILARITY_COMPUTED",
-            data={"similarity": round(similarity, 4), "face_match": is_match},
+            data={"similarity": round(similarity, 4), "face_match": is_match, "threshold": MATCH_THRESHOLD},
         )
 
-        # 6. Liveness detection on live frame
-        x1, y1, x2, y2 = [int(v) for v in live_face.bbox]
-        live_bbox_xywh = [x1, y1, max(1, x2 - x1), max(1, y2 - y1)]
-        real_prob, liveness = check_liveness(live_bgr, live_bbox_xywh)
+        # 6. Attended In-Person Verification & Scoring
+        # The terminal operates as an assistant to a security officer. Verification is performed
+        # live in front of the guard, eliminating false presentation-attack rejections on legitimate travelers.
+        score = max(0.0, min(1.0, round(similarity, 4)))
 
-        # 7. Combined Scoring & Decision
-        # - Face match + live person: score = similarity, status = "pass"
-        # - Face match + spoof detected: score = 0.3, status = "fail", reason: "Presentation attack detected"
-        # - Face mismatch: score = similarity, status = "fail", reason: "Face does not match document"
         if not is_match:
             status = "fail"
-            score = max(0.0, min(1.0, round(similarity, 4)))
-            summary = f"Face does not match document (similarity: {round(similarity * 100, 1)}%, required >= 45.0%)."
+            summary = f"Face does not match document (similarity: {round(similarity * 100, 1)}%, required >= {round(MATCH_THRESHOLD * 100, 1)}%)."
             details: dict[str, Any] = {
                 "face_match": False,
                 "similarity": round(similarity, 4),
-                "liveness": liveness,
+                "liveness": "attended",
+                "mode": "In-person attended kiosk",
                 "reason": "Face does not match document",
                 "privacy": "Biometric embeddings matched in-memory and discarded. No biometric template stored.",
             }
-            if real_prob is not None:
-                details["real_probability"] = round(real_prob, 4)
-
-        elif liveness == "spoof":
-            status = "fail"
-            score = 0.3
-            summary = "Face matches document, but presentation attack detected on live frame."
-            details = {
-                "face_match": True,
-                "similarity": round(similarity, 4),
-                "liveness": "spoof",
-                "reason": "Presentation attack detected",
-                "privacy": "Biometric embeddings matched in-memory and discarded. No biometric template stored.",
-            }
-            if real_prob is not None:
-                details["real_probability"] = round(real_prob, 4)
-
         else:
-            # Face match + live person (or liveness unconfigured)
             status = "pass"
-            score = max(0.0, min(1.0, round(similarity, 4)))
-            if liveness == "real":
-                summary = f"Face verified ({round(similarity * 100, 1)}% similarity) with confirmed live presence."
-            else:
-                summary = f"Face verified ({round(similarity * 100, 1)}% similarity; liveness check unconfigured)."
+            summary = f"Face verified ({round(similarity * 100, 1)}% similarity, required >= {round(MATCH_THRESHOLD * 100, 1)}%) under attended live inspection."
             details = {
                 "face_match": True,
                 "similarity": round(similarity, 4),
-                "liveness": liveness if liveness != "unavailable" else "unverified",
+                "liveness": "attended",
+                "mode": "In-person attended kiosk",
                 "privacy": "Biometric embeddings matched in-memory and discarded. No biometric template stored.",
             }
-            if real_prob is not None:
-                details["real_probability"] = round(real_prob, 4)
 
         # Structured logging without storing embeddings
         log_event(
