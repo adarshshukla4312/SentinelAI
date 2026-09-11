@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Node / Next.js
+node_modules/
+.next*/
+out/
+*.tsbuildinfo
+
+# Logs & OS files
+*.log
+.DS_Store
+Thumbs.db
+
+# Runtime evidence and local configuration
+backend/data/
+backend/.env
+frontend/.env.local
+
+# Model weights are downloaded independently and must not enter source control.
+backend/models/
+backend/vendor/
+
