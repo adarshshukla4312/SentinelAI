@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
+from logging_config import get_logger, log_event
+
+logger = get_logger("sentinelai.blockchain")
 
 _lock = Lock()
 _GENESIS_HASH = "0" * 64
@@ -32,7 +36,11 @@ class AuditLedger:
     def _read(self) -> list[dict[str, Any]]:
         if not self.ledger_path.exists():
             return []
-        return json.loads(self.ledger_path.read_text(encoding="utf-8"))
+        try:
+            return json.loads(self.ledger_path.read_text(encoding="utf-8"))
+        except Exception:
+            log_event(logger, logging.ERROR, "FAILED_TO_READ_AUDIT_LEDGER", exc_info=True)
+            return []
 
     def append(self, receipt: dict[str, Any]) -> dict[str, Any]:
         with _lock:
@@ -50,6 +58,12 @@ class AuditLedger:
             temporary_path = self.ledger_path.with_suffix(".tmp")
             temporary_path.write_text(canonical_json(records), encoding="utf-8")
             temporary_path.replace(self.ledger_path)
+            log_event(
+                logger,
+                logging.DEBUG,
+                "AUDIT_RECORD_APPENDED",
+                data={"sequence": record["sequence"], "chain_hash": record["chain_hash"]},
+            )
             return record
 
     def verify(self) -> bool:
@@ -58,9 +72,30 @@ class AuditLedger:
         previous_hash = _GENESIS_HASH
         for record in records:
             if record["previous_hash"] != previous_hash:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "AUDIT_LEDGER_CHAIN_MISMATCH",
+                    data={
+                        "sequence": record.get("sequence"),
+                        "expected_previous": previous_hash,
+                        "actual_previous": record.get("previous_hash"),
+                    },
+                )
                 return False
             expected = sha256_hex(f"{previous_hash}:{record['receipt_hash']}")
             if record["chain_hash"] != expected:
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "AUDIT_RECORD_HASH_CORRUPT",
+                    data={
+                        "sequence": record.get("sequence"),
+                        "expected_hash": expected,
+                        "actual_hash": record.get("chain_hash"),
+                    },
+                )
                 return False
             previous_hash = record["chain_hash"]
+        log_event(logger, logging.DEBUG, "AUDIT_LEDGER_VERIFIED", data={"record_count": len(records)})
         return True

@@ -23,6 +23,30 @@ class TD3ValidationTests(unittest.TestCase):
     def test_icao_weighting(self) -> None:
         self.assertEqual(calculate_check_digit("L898902C3"), "6")
 
+    def test_verhoeff_valid_aadhaar(self) -> None:
+        from pipeline.tier1_crypto import validate_verhoeff, run_aadhaar
+
+        # Test valid Aadhaar numbers
+        self.assertTrue(validate_verhoeff("501363738063"))
+        self.assertTrue(validate_verhoeff("5013 6373 8063"))
+
+        # Test invalid check digit
+        self.assertFalse(validate_verhoeff("501363738064"))
+
+        # Test run_aadhaar returns pass
+        result = run_aadhaar("5013 6373 8063")
+        self.assertEqual(result.status, "pass")
+        self.assertEqual(result.score, 1.0)
+        self.assertEqual(result.details["document_number"], "5013 6373 8063")
+        self.assertTrue(result.details["checks"]["verhoeff_checksum"])
+
+    def test_verhoeff_invalid_aadhaar(self) -> None:
+        from pipeline.tier1_crypto import run_aadhaar
+
+        result = run_aadhaar("5013 6373 8064")
+        self.assertEqual(result.status, "fail")
+        self.assertFalse(result.details["checks"]["verhoeff_checksum"])
+
 
 if __name__ == "__main__":
     unittest.main()

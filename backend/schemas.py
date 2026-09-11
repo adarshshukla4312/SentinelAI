@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 TierStatus = Literal["pass", "fail", "review", "unavailable"]
 Decision = Literal["CLEAR", "REVIEW", "FLAG", "HARD_REJECT"]
+DocumentType = Literal["passport", "aadhaar", "auto"]
 
 
 class TierResult(BaseModel):
@@ -27,6 +28,7 @@ class ScreeningResponse(BaseModel):
     reasons: list[str]
     tiers: list[TierResult]
     audit: dict[str, Any]
+    document_type: str = "auto"
     artifacts: dict[str, str] = Field(default_factory=dict)
 
 

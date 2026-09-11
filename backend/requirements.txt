@@ -1,6 +1,10 @@
 fastapi>=0.116,<1
 uvicorn[standard]>=0.35,<1
 python-multipart>=0.0.20,<1
-pillow>=11,<12
-numpy>=2.3,<3
+pillow>=11,<13
+numpy>=2.0,<3
 reportlab>=4.4,<5
+web3>=7.0.0
+rapidocr_onnxruntime>=1.2.0
+insightface>=0.7.3
+onnxruntime>=1.18.0

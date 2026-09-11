@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from io import BytesIO
+import logging
 from textwrap import wrap
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 
+from logging_config import get_logger, log_event
 from schemas import ScreeningResponse
+
+logger = get_logger("sentinelai.evidence")
 
 
 def build_evidence_pdf(screening: ScreeningResponse) -> bytes:
@@ -17,6 +21,12 @@ def build_evidence_pdf(screening: ScreeningResponse) -> bytes:
     BSA Section 63 certificate workflow needs organization-approved wording and
     signer controls; this report intentionally labels itself as a system receipt.
     """
+    log_event(
+        logger,
+        logging.DEBUG,
+        "BUILDING_EVIDENCE_PDF",
+        data={"screening_id": screening.screening_id, "decision": screening.decision},
+    )
     output = BytesIO()
     pdf = canvas.Canvas(output, pagesize=A4, pageCompression=1)
     width, height = A4
@@ -54,4 +64,11 @@ def build_evidence_pdf(screening: ScreeningResponse) -> bytes:
     line("", gap=3 * mm)
     line("This is a system-generated demonstration receipt. It is not a statutory certificate.", 8)
     pdf.save()
-    return output.getvalue()
+    pdf_bytes = output.getvalue()
+    log_event(
+        logger,
+        logging.INFO,
+        "EVIDENCE_PDF_BUILT",
+        data={"screening_id": screening.screening_id, "size_bytes": len(pdf_bytes)},
+    )
+    return pdf_bytes
