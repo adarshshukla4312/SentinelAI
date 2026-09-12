@@ -191,7 +191,40 @@ class Tier2OCRTests(unittest.TestCase):
         self.assertEqual(parsed["expiry_date"], "120415")
         self.assertEqual(parsed["name"], "ERIKSSON ANNA MARIA")
 
+    def test_aadhaar_name_extraction_from_blocks(self) -> None:
+        """Unit test extract_viz_fields and extract_back_fields for Aadhaar cards."""
+        from pipeline.tier2_ocr import TextBlock, extract_viz_fields, extract_back_fields
+
+        def make_block(text: str, x_center: float, y_center: float, width: float = 400, height: float = 20, conf: float = 0.95) -> TextBlock:
+            """Build a TextBlock from center coords. box is [[xmin,ymin],[xmax,ymin],[xmax,ymax],[xmin,ymax]]."""
+            xmin, xmax = x_center - width / 2, x_center + width / 2
+            ymin, ymax = y_center - height / 2, y_center + height / 2
+            box = [[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax]]
+            return TextBlock(box=box, text=text, confidence=conf)
+
+        blocks = [
+            make_block("Government of India", x_center=200, y_center=30),
+            make_block("RISHABH BHATNAGAR", x_center=200, y_center=100, height=25),
+            make_block("DOB: 30/06/2006", x_center=200, y_center=150),
+            make_block("MALE", x_center=200, y_center=180),
+            make_block("2054 3809 8275", x_center=200, y_center=230, height=30),
+        ]
+        viz_fields = extract_viz_fields(blocks, image_width=800, image_height=320)
+        self.assertEqual(viz_fields.get("name"), "RISHABH BHATNAGAR")
+        self.assertEqual(viz_fields.get("aadhaar_number"), "2054 3809 8275")
+        self.assertEqual(viz_fields.get("date_of_birth"), "30/06/2006")
+
+        back_blocks = [
+            make_block("Address: Rishabh Bhatnagar, S/O: Mohit Bhatnagar, House, Puri", x_center=300, y_center=100),
+            make_block("PO: Maya Puri, DIST: 110064", x_center=300, y_center=140),
+        ]
+        back_fields = extract_back_fields(back_blocks)
+        self.assertEqual(back_fields.get("care_of"), "Mohit Bhatnagar")
+        self.assertEqual(back_fields.get("name"), "RISHABH BHATNAGAR")
+        self.assertEqual(back_fields.get("pin_code"), "110064")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

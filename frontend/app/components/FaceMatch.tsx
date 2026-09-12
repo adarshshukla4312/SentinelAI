@@ -271,13 +271,13 @@ export function FaceMatch({
                 disabled={isSubmitting}
                 onClick={onRunScreening}
                 style={{
-                  background: "linear-gradient(135deg, #0066ff, #2563eb)",
+                  background: "#2563eb",
                   color: "#ffffff",
-                  fontWeight: 600,
-                  fontSize: "13px",
-                  padding: "10px 20px",
+                  fontWeight: 650,
+                  fontSize: "14px",
+                  padding: "12px 24px",
                   borderRadius: "9999px",
-                  boxShadow: "0 4px 14px rgba(37, 99, 235, 0.35)",
+                  boxShadow: "0 0 30px rgba(3, 103, 254, 0.5), 0 10px 20px rgba(0, 0, 0, 0.5)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",

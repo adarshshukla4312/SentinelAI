@@ -15,6 +15,7 @@ import {
   generateSamplePassportImage,
   type SamplePreset,
 } from "../utils/samplePresets";
+import { runLocalScreening } from "../utils/localScreening";
 
 const acceptedTypes = ["image/jpeg", "image/png", "image/webp"];
 
@@ -46,6 +47,8 @@ export default function TestingConsolePage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
   const [isGeneratingPreset, setIsGeneratingPreset] = useState(false);
+  // Engine mode: "api" = backend reachable; "offline" = local fallback active
+  const [engineMode, setEngineMode] = useState<"api" | "offline" | "detecting">("detecting");
 
   // Manage object URLs
   useEffect(() => {
@@ -154,7 +157,6 @@ export default function TestingConsolePage() {
       payload.append("document_back", backFile);
     }
     payload.append("document_type", documentType);
-
     if (liveFrameBlob) {
       payload.append("live_frame", liveFrameBlob, "live_capture.jpg");
     }
@@ -162,30 +164,69 @@ export default function TestingConsolePage() {
       payload.append("mrz", mrz.trim());
     }
 
-    try {
-      const response = await fetch("/api/v1/screenings", { method: "POST", body: payload });
-      let body: any;
+    // ── Try the backend API first (direct connection to FastAPI to prevent proxy hangup) ──
+    let apiReachable = false;
+    const apiEndpoints = [
+      "http://127.0.0.1:8000/api/v1/screenings",
+      "http://localhost:8000/api/v1/screenings",
+      "/api/v1/screenings",
+    ];
+
+    for (const endpoint of apiEndpoints) {
       try {
-        body = await response.json();
-      } catch {
-        setError(`Server returned unparseable response (HTTP ${response.status}).`);
+        const response = await fetch(endpoint, {
+          method: "POST",
+          body: payload,
+        });
+
+        if (response.ok) {
+          let body: any;
+          try {
+            body = await response.json();
+          } catch {
+            body = null;
+          }
+          if (body && body.screening_id) {
+            apiReachable = true;
+            setEngineMode("api");
+            setResult(body as ScreeningResponse);
+            if (currentStage === 1) setCurrentStage(2);
+            setIsSubmitting(false);
+            return;
+          }
+        } else if (response.status >= 400 && response.status < 500) {
+          apiReachable = true;
+          let body: any;
+          try { body = await response.json(); } catch { body = {}; }
+          setEngineMode("api");
+          setError(body.detail ?? `Screening failed with HTTP status ${response.status}.`);
+          setIsSubmitting(false);
+          return;
+        }
+      } catch (_err) {
+        // Try next endpoint URL
+        continue;
+      }
+    }
+
+    // ── Backend unreachable – switch to local fallback ────────────────
+    if (!apiReachable) {
+      setEngineMode("offline");
+      try {
+        const offlineResult = await runLocalScreening({
+          frontFile,
+          mrz: mrz.trim() || undefined,
+          documentType,
+        });
+        setResult(offlineResult);
+        if (currentStage === 1) setCurrentStage(2);
+      } catch (localErr: any) {
+        setError(
+          `Both backend API and local fallback failed: ${localErr?.message ?? "Unknown error"}`
+        );
+      } finally {
         setIsSubmitting(false);
-        return;
       }
-      if (!response.ok) {
-        setError(body.detail ?? `Screening failed with HTTP status ${response.status}.`);
-        setIsSubmitting(false);
-        return;
-      }
-      setResult(body as ScreeningResponse);
-      // Auto-advance to results overview / Stage 2
-      if (currentStage === 1) {
-        setCurrentStage(2);
-      }
-    } catch (err: any) {
-      setError(`Network error connecting to screening engine: ${err?.message ?? "Service unavailable"}`);
-    } finally {
-      setIsSubmitting(false);
     }
   }
 
@@ -212,7 +253,45 @@ export default function TestingConsolePage() {
             <span className="station-id">STATION: BORDER-INSPECT-01</span>
           </div>
           <span className="header-divider">/</span>
-          <span className="station-mode">ENGINE: OFFLINE ONNX · ACTIVE</span>
+          <span className="station-mode">
+            ENGINE:{" "}
+            {engineMode === "api"
+              ? "BACKEND API · LIVE"
+              : engineMode === "offline"
+              ? "OFFLINE HEURISTIC · ACTIVE"
+              : "OFFLINE ONNX · ACTIVE"}
+          </span>
+          {engineMode !== "detecting" && (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "4px",
+                fontSize: "10px",
+                fontWeight: 700,
+                letterSpacing: "0.08em",
+                padding: "2px 8px",
+                borderRadius: "999px",
+                background:
+                  engineMode === "api"
+                    ? "rgba(0,200,120,0.15)"
+                    : "rgba(255,160,0,0.15)",
+                border: `1px solid ${engineMode === "api" ? "#00c878" : "#ffa000"}`,
+                color: engineMode === "api" ? "#00c878" : "#ffa000",
+              }}
+            >
+              <span
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: engineMode === "api" ? "#00c878" : "#ffa000",
+                  display: "inline-block",
+                }}
+              />
+              {engineMode === "api" ? "API" : "OFFLINE"}
+            </span>
+          )}
           <span className="header-divider">/</span>
           <span className="station-spec">MHA SPEC · SIH26188</span>
         </div>
@@ -495,9 +574,13 @@ export default function TestingConsolePage() {
                           </tr>
                           <tr>
                             <td><strong>Full Name</strong></td>
-                            <td>{vizFields.name ?? "—"}</td>
+                            <td>{vizFields.name ?? vizFields.full_name ?? vizFields.given_name ?? "—"}</td>
                             <td>Visual Inspection Zone</td>
-                            <td><span className="table-badge pass">Extracted</span></td>
+                            <td>
+                              <span className={`table-badge ${vizFields.name || vizFields.full_name || vizFields.given_name ? "pass" : "review"}`}>
+                                {vizFields.name || vizFields.full_name || vizFields.given_name ? "Extracted" : "Not Extracted"}
+                              </span>
+                            </td>
                           </tr>
                           <tr>
                             <td><strong>Date of Birth (DOB)</strong></td>
@@ -540,6 +623,83 @@ export default function TestingConsolePage() {
                     </div>
                   );
                 })()}
+
+                {/* Raw OCR Debug Panel */}
+                {tier2?.details && (
+                  <details className="ocr-debug-panel" style={{marginTop: "1rem"}} open>
+                    <summary style={{cursor: "pointer", fontFamily: "monospace", fontSize: "0.78rem", color: "var(--accent-cyan, #00d4ff)", padding: "0.5rem 0", userSelect: "none"}}>
+                      🔍 Raw OCR Text Blocks Detected ({(tier2.details.detected_boxes as any[])?.length ?? 0} blocks) — click to collapse
+                    </summary>
+                    <div style={{marginTop: "0.5rem", display: "flex", flexDirection: "column", gap: "0.5rem"}}>
+                      <div style={{fontSize: "0.7rem", color: "rgba(255,255,255,0.5)", fontFamily: "monospace"}}>
+                        Blocks sorted top→bottom by Y position. If &quot;Rishabh Bhatnagar&quot; does not appear here, the OCR engine cannot read that region of the card.
+                      </div>
+                      <div style={{
+                        background: "rgba(0,0,0,0.5)",
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        borderRadius: "8px",
+                        padding: "0.75rem",
+                        maxHeight: "320px",
+                        overflowY: "auto",
+                        fontFamily: "monospace",
+                        fontSize: "0.74rem",
+                      }}>
+                        {(tier2.details.detected_boxes as any[] ?? [])
+                          .slice()
+                          .sort((a: any, b: any) => {
+                            const ya = a.box ? (a.box[0][1] + a.box[2][1]) / 2 : 0;
+                            const yb = b.box ? (b.box[0][1] + b.box[2][1]) / 2 : 0;
+                            return ya - yb;
+                          })
+                          .map((block: any, i: number) => {
+                            const yc = block.box ? Math.round((block.box[0][1] + block.box[2][1]) / 2) : "?";
+                            const conf = typeof block.confidence === "number" ? (block.confidence * 100).toFixed(0) : "?";
+                            const isName = /rishabh|bhatnagar/i.test(block.text ?? "");
+                            return (
+                              <div key={i} style={{
+                                padding: "2px 6px",
+                                marginBottom: "2px",
+                                borderRadius: "4px",
+                                background: isName ? "rgba(0,255,120,0.15)" : "transparent",
+                                borderLeft: isName ? "2px solid #00ff78" : "2px solid transparent",
+                                color: isName ? "#00ff78" : "rgba(255,255,255,0.75)",
+                                display: "flex",
+                                gap: "1rem",
+                                alignItems: "baseline",
+                              }}>
+                                <span style={{color: "rgba(255,255,255,0.3)", minWidth: "36px"}}>y={yc}</span>
+                                <span style={{flex: 1, wordBreak: "break-all"}}>{block.text ?? "(empty)"}</span>
+                                <span style={{color: "rgba(255,255,255,0.3)", minWidth: "40px"}}>{conf}%</span>
+                              </div>
+                            );
+                          })
+                        }
+                        {!(tier2.details.detected_boxes as any[])?.length && (
+                          <div style={{color: "#ff6b6b"}}>No text blocks detected by OCR engine.</div>
+                        )}
+                      </div>
+                      <details style={{marginTop: "0.25rem"}}>
+                        <summary style={{cursor: "pointer", fontFamily: "monospace", fontSize: "0.72rem", color: "rgba(255,255,255,0.4)"}}>
+                          Extracted viz_fields (JSON)
+                        </summary>
+                        <pre style={{
+                          background: "rgba(0,0,0,0.4)",
+                          border: "1px solid rgba(255,255,255,0.08)",
+                          borderRadius: "6px",
+                          padding: "0.75rem",
+                          fontSize: "0.72rem",
+                          color: "#a0f0a0",
+                          overflowX: "auto",
+                          marginTop: "0.4rem",
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word",
+                        }}>
+                          {JSON.stringify(tier2.details.viz_fields, null, 2)}
+                        </pre>
+                      </details>
+                    </div>
+                  </details>
+                )}
 
                 {tier2?.summary && (
                   <div className="verdict-callout">

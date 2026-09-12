@@ -1,73 +1,66 @@
 import Link from "next/link";
+import { SonarGrid } from "@/components/ui/sonar-grid";
 
 export default function HomePage() {
   return (
-    <main>
-      {/* 1. Detached Stadium Pill Navigation Bar */}
-      <header>
-        <nav className="nav-pill" aria-label="SentinelAI main navigation">
-          <Link className="brand" href="/" aria-label="SentinelAI home">
-            <span className="brand-mark" aria-hidden="true">S</span>
-            <span className="brand-title">SentinelAI</span>
-          </Link>
-          <div className="nav-links">
-            <a href="#features">Features</a>
-            <a href="#defense-tiers">5-Tier Defense</a>
-            <a href="#architecture">Architecture</a>
-            <a href="#security">Security</a>
-          </div>
-          <div className="nav-actions">
-            <span className="nav-security">SIH26188 · MHA</span>
-            <Link className="nav-cta-btn" href="/test">
+    <div className="w-full bg-black text-white">
+
+      {/* 2. Hero Section with Full-Width SonarGrid Background */}
+      <SonarGrid
+        id="hero"
+        ringWidth={90}
+        speed={260}
+        amplitude={2.2}
+        pingEvery={2.4}
+        interactive={true}
+        spacing={26}
+        baseOpacity={0.28}
+        pingArea={[0.08, 0.12, 0.92, 0.88]}
+        className="w-full relative overflow-hidden py-16 sm:py-24 px-4 sm:px-8 border-b border-zinc-800/60"
+      >
+        <div className="max-w-[920px] mx-auto text-center flex flex-col items-center">
+          <p className="eyebrow">Ctrl S · Ministry of Home Affairs · AI Document Screening</p>
+          <h1>Verify identity with evidence, not assumptions.</h1>
+          <p className="hero-copy">
+            An offline-first multi-tier document screening and biometric verification engine.
+            Eliminates false senses of security with deterministic cryptography, passive forensics,
+            and tamper-proof blockchain audit trails.
+          </p>
+
+          <div className="hero-actions">
+            <Link className="button-primary" href="/test">
               Launch Testing Console →
             </Link>
+            <a className="button-secondary" href="#defense-tiers">
+              Explore 5-Tier Defense ↓
+            </a>
           </div>
-        </nav>
-      </header>
 
-      {/* 2. Hero Section */}
-      <section className="hero" id="hero">
-        <p className="eyebrow">Ctrl S · Ministry of Home Affairs · AI Document Screening</p>
-        <h1>Verify identity with evidence, not assumptions.</h1>
-        <p className="hero-copy">
-          An offline-first multi-tier document screening and biometric verification engine.
-          Eliminates false senses of security with deterministic cryptography, passive forensics,
-          and tamper-proof blockchain audit trails.
-        </p>
-
-        <div className="hero-actions">
-          <Link className="button-primary" href="/test">
-            Launch Testing Console →
-          </Link>
-          <a className="button-secondary" href="#defense-tiers">
-            Explore 5-Tier Defense ↓
-          </a>
-        </div>
-
-        {/* Highlight Metric Pills */}
-        <div className="hero-metrics" aria-label="Key system performance metrics">
-          <div className="metric-pill">
-            <span className="metric-dot" aria-hidden="true" />
-            <span className="metric-val">&lt; 800ms</span>
-            <span className="metric-lbl">Latency</span>
-          </div>
-          <div className="metric-pill">
-            <span className="metric-dot" aria-hidden="true" />
-            <span className="metric-val">5-Tier</span>
-            <span className="metric-lbl">Defense-in-Depth</span>
-          </div>
-          <div className="metric-pill">
-            <span className="metric-dot" aria-hidden="true" />
-            <span className="metric-val">0 Bytes</span>
-            <span className="metric-lbl">Biometric Persistence (Match-and-Discard)</span>
-          </div>
-          <div className="metric-pill">
-            <span className="metric-dot" aria-hidden="true" />
-            <span className="metric-val">SHA-256</span>
-            <span className="metric-lbl">Polygon Amoy Ledger</span>
+          {/* Highlight Metric Pills */}
+          <div className="hero-metrics" aria-label="Key system performance metrics">
+            <div className="metric-pill">
+              <span className="metric-dot" aria-hidden="true" />
+              <span className="metric-val">&lt; 800ms</span>
+              <span className="metric-lbl">Latency</span>
+            </div>
+            <div className="metric-pill">
+              <span className="metric-dot" aria-hidden="true" />
+              <span className="metric-val">5-Tier</span>
+              <span className="metric-lbl">Defense-in-Depth</span>
+            </div>
+            <div className="metric-pill">
+              <span className="metric-dot" aria-hidden="true" />
+              <span className="metric-val">0 Bytes</span>
+              <span className="metric-lbl">Biometric Persistence (Match-and-Discard)</span>
+            </div>
+            <div className="metric-pill">
+              <span className="metric-dot" aria-hidden="true" />
+              <span className="metric-val">SHA-256</span>
+              <span className="metric-lbl">Polygon Amoy Ledger</span>
+            </div>
           </div>
         </div>
-      </section>
+      </SonarGrid>
 
       {/* Core Features Overview Section */}
       <section className="showcase-section" id="features" aria-labelledby="features-heading">
@@ -640,6 +633,6 @@ tx_hash = polygon_contract.commit_screening(
         </p>
         <span className="footer-legal">Team Ctrl S · 2026</span>
       </footer>
-    </main>
+    </div>
   );
 }

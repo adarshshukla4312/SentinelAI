@@ -16,7 +16,16 @@ from PIL import UnidentifiedImageError
 from config import ALLOWED_IMAGE_TYPES, MAX_DOCUMENT_BYTES, SCAN_DIR, ensure_runtime_directories
 from evidence.pdf_generator import build_evidence_pdf
 from logging_config import configure_logging, get_logger, log_event
+import numpy as np
+from PIL import Image, ImageOps
+
 from pipeline.orchestrator import screen
+from pipeline.tier2_ocr import (
+    _run_engine,
+    extract_viz_fields,
+    extract_back_fields,
+    get_ocr_engine,
+)
 from schemas import HealthResponse, ScreeningResponse
 
 logger = get_logger("sentinelai.api")
@@ -69,6 +78,47 @@ def health() -> HealthResponse:
     return HealthResponse(status="ok", service="sentinelai-api", version=app.version)
 
 
+@app.post("/api/v1/debug-ocr")
+async def debug_ocr(
+    document: Annotated[UploadFile, File(description="Document image to debug OCR on")],
+) -> dict:
+    """Debug endpoint: runs raw OCR on uploaded image and returns text blocks + extracted fields."""
+    from fastapi.responses import JSONResponse
+
+    content = await document.read()
+    from io import BytesIO
+    pil_image = ImageOps.exif_transpose(Image.open(BytesIO(content))).convert("RGB")
+    if max(pil_image.size) > 1024:
+        pil_image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+
+    engine, engine_type = get_ocr_engine()
+    if engine is None:
+        return {"error": "OCR engine unavailable"}
+
+    img_array = np.ascontiguousarray(np.array(pil_image), dtype=np.uint8)
+    blocks = _run_engine(engine, engine_type, img_array)
+
+    viz_fields = extract_viz_fields(blocks, pil_image.width, pil_image.height)
+    back_fields = extract_back_fields(blocks)
+
+    return {
+        "image_size": {"width": pil_image.width, "height": pil_image.height},
+        "engine": engine_type,
+        "blocks": [
+            {
+                "text": b.text,
+                "y_center": round(b.y_center, 1),
+                "x_center": round(b.x_center, 1),
+                "height": round(b.height, 1),
+                "confidence": round(b.confidence, 3),
+            }
+            for b in blocks
+        ],
+        "viz_fields": viz_fields,
+        "back_fields": back_fields,
+    }
+
+
 async def _write_upload(document: UploadFile) -> Path:
     ensure_runtime_directories()
     content_type = document.content_type or ""
@@ -110,6 +160,10 @@ async def _write_upload(document: UploadFile) -> Path:
         raise
     finally:
         await document.close()
+
+    if total_bytes == 0:
+        destination.unlink(missing_ok=True)
+        return None
     return destination
 
 
@@ -135,9 +189,13 @@ async def create_screening(
         },
     )
     source_path = await _write_upload(document)
+    if source_path is None:
+        raise HTTPException(status_code=422, detail="The front document image is empty.")
+
     back_path: Path | None = None
     if document_back is not None and getattr(document_back, "filename", None):
         back_path = await _write_upload(document_back)
+
     live_path: Path | None = None
     if live_frame is not None and getattr(live_frame, "filename", None):
         live_path = await _write_upload(live_frame)
@@ -156,6 +214,9 @@ async def create_screening(
     except OSError as error:
         log_event(logger, logging.ERROR, "IMAGE_PROCESSING_OS_ERROR", exc_info=True)
         raise HTTPException(status_code=422, detail=f"The image could not be processed: {error}") from error
+    except Exception as error:
+        log_event(logger, logging.ERROR, "SCREENING_PIPELINE_ERROR", data={"error": str(error)}, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Screening failed: {error}") from error
     finally:
         source_path.unlink(missing_ok=True)
         if back_path is not None:
